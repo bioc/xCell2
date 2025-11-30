@@ -35,6 +35,7 @@ xCell2Train(
 
 \strong{Notes:}
 \itemize{
+  \item If is RNA-Seq data - normalization by gene length is highly recommended.
   \item If multiple assays exist, \code{"tpm"} is prioritized.
   \item For microarray data, the \code{"counts"} assay must be used.
 }}
@@ -51,7 +52,8 @@ This parameter is required if \code{returnAnalysis} is set to \code{TRUE}, as it
   \item \code{"sample"}: The sample or cell identifier, matching column names in the reference matrix.
   \item \code{"dataset"}: The dataset source for each sample. If not applicable, use a constant value for all samples.
 }
-This parameter is unnecessary if \code{ref} is a SummarizedExperiment or SingleCellExperiment object, as metadata should be in \code{colData}.}
+If \code{ref} is a \code{SummarizedExperiment} or \code{SingleCellExperiment} object, this parameter can be used to 
+**override** the default labels extracted from \code{colData(ref)}.}
 
 \item{refType}{The type of reference data: \code{"rnaseq"} for RNA-Seq, \code{"array"} for microarray, or \code{"sc"} for scRNA-Seq.}
 
@@ -116,6 +118,12 @@ dice_labels$ont <- NA
 dice_labels$sample <- colnames(dice_ref)
 dice_labels$dataset <- "DICE"
 DICE.xCell2Ref <- xCell2::xCell2Train(ref = dice_ref, labels = dice_labels, refType = "rnaseq")
+
+# Parallel processing example with BiocParallel
+library(BiocParallel)
+parallel_param <- MulticoreParam(workers = 2)
+DICE.xCell2Ref <- xCell2::xCell2Train(ref = dice_ref, labels = dice_labels, refType = "rnaseq",
+ BPPARAM = parallel_param)
 
 }
 \seealso{

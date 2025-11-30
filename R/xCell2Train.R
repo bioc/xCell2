@@ -58,10 +58,15 @@ ValidateInputs <- function(ref, labels, refType) {
     
   }
   
-  if (all(colnames(labels) %in% c("ont", "label", "sample", "dataset"))) {
+  if (all(c("ont", "label", "sample", "dataset") %in% colnames(labels))) {
     labels <- labels[, c("ont", "label", "sample", "dataset")]
   } else {
-    stop("labels must have 4 columns: 'ont'', 'label'', 'sample'' and 'dataset'")
+    if (inherits(ref, "SummarizedExperiment") || inherits(ref, "SingleCellExperiment")) {
+      stop("colData(ref) must have 4 columns: 'ont'', 'label'', 'sample'' and 'dataset'")
+      
+    }else{
+      stop("labels must have 4 columns: 'ont'', 'label'', 'sample'' and 'dataset'")
+    }
   }
   
   if (length(unique(labels$label)) < 3) {
@@ -78,10 +83,10 @@ ValidateInputs <- function(ref, labels, refType) {
 }
 
 # Function to convert single-cell data to pseudo-bulk data
-ScToPseudoBulk <- function(ref, labels, minPbCells, minPbSamples) {
+ScToPseudoBulk <- function(ref, labels, minPbCells, minPbSamples, BPPARAM) {
   cellTypes <- unique(labels$label)
   
-  groupsList <- lapply(cellTypes, function(cellType) {
+  groupsList <- BiocParallel::bplapply(cellTypes, function(cellType) {
     cellTypeSamples <- labels[labels$label == cellType, ]$sample
     
     # Calculate maximum possible number of groups given minPbCells
@@ -104,37 +109,40 @@ ScToPseudoBulk <- function(ref, labels, minPbCells, minPbSamples) {
                 / (length(cellTypeSamplesShuffled) / numGroups))
       )
       
-      vapply(listOfShuffledSamples, function(group) {
+      tmp <- vapply(listOfShuffledSamples, function(group) {
         if (length(group) == 1) {
           ref[, group]
         } else {
           if ("matrix" %in% class(ref)) {
             Rfast::rowsums(ref[, group])
           } else {
-            Matrix::rowSums(ref[, group])
+            rowSums(ref[, group])
           }
         }
       }, FUN.VALUE = double(nrow(ref)))
     } else {
       tmp <- ref[, cellTypeSamples]
-      colnames(tmp) <- as.character(seq_along(colnames(tmp)))
       tmp <- as.data.frame(as.matrix(tmp))
-      tmp
     }
-  })
+    
+    colnames(tmp) <- paste0(cellType, ".", seq_len(ncol(tmp)))
+    tmp
+    
+  }, BPPARAM = BPPARAM)
   names(groupsList) <- cellTypes
   
-  pseudoRef <- as.matrix(dplyr::bind_cols(groupsList))
+  pseudoRef <- as.matrix(Reduce(cbind, groupsList))
   rownames(pseudoRef) <- rownames(ref)
   
-  pseudoLabel <- tibble::tibble(labels) %>%
-    dplyr::select("ont", "label") %>%
-    unique() %>%
-    dplyr::right_join(tibble::tibble(
-      label = sub("\\.\\d+$", "", colnames(pseudoRef)),
-      sample = colnames(pseudoRef),
-      dataset = "pseudoBulk"
-    ), by = "label") %>%
+  label_tmp <- tibble::tibble(
+    label = sub("\\.\\d+$", "", colnames(pseudoRef)),
+    sample = colnames(pseudoRef),
+    dataset = "pseudoBulk"
+  )
+  
+  pseudoLabel <- label_tmp %>%
+    left_join(unique(labels[,c("ont", "label")]), by = "label") %>%
+    dplyr::select(ont, everything()) %>%
     as.data.frame()
   
   return(list(ref = pseudoRef, labels = pseudoLabel))
@@ -145,7 +153,7 @@ PrepRefMix <- function(ref, mix, refType, minScGenes) {
   
   if (refType == "sc") {
     message("> Normalizing pseudo bulk reference to CPM.")
-    libSizes <- Matrix::colSums(ref)
+    libSizes <- colSums(ref)
     normFactor <- 1e6 / libSizes
     refNorm <- ref %*% Matrix::Diagonal(x = normFactor)
     colnames(refNorm) <- colnames(ref)
@@ -629,7 +637,8 @@ LearnParams <- function(gepMat, corMat, signatures, depList, BPPARAM) {
 #' It supports references derived from RNA-Seq, microarray, and scRNA-Seq data and can be derived from various tissues and organisms. 
 #'
 #' @importFrom magrittr %>%
-#' @importFrom dplyr bind_cols select right_join mutate_all pull bind_rows
+#' @importFrom tidyselect everything
+#' @importFrom dplyr bind_cols select right_join mutate_all pull bind_rows left_join select
 #' @importFrom tibble tibble
 #' @importFrom readr read_tsv
 #' @importFrom BiocParallel SerialParam MulticoreParam bplapply
@@ -638,7 +647,7 @@ LearnParams <- function(gepMat, corMat, signatures, depList, BPPARAM) {
 #' @importFrom SingleCellExperiment colData
 #' @importFrom minpack.lm nlsLM
 #' @importFrom Rfast rowMedians rowmeans rowsums Sort
-#' @importFrom Matrix rowMeans rowSums colSums Diagonal
+#' @importFrom Matrix Diagonal
 #' @importFrom singscore rankGenes simpleScore
 #' @importFrom stats coef cor lm quantile var
 #' @importFrom methods new
@@ -656,6 +665,7 @@ LearnParams <- function(gepMat, corMat, signatures, depList, BPPARAM) {
 #'   
 #'   \strong{Notes:}
 #'   \itemize{
+#'     \item If is RNA-Seq data - normalization by gene length is highly recommended.
 #'     \item If multiple assays exist, \code{"tpm"} is prioritized.
 #'     \item For microarray data, the \code{"counts"} assay must be used.
 #'   }
@@ -731,6 +741,12 @@ LearnParams <- function(gepMat, corMat, signatures, depList, BPPARAM) {
 #' dice_labels$dataset <- "DICE"
 #' DICE.xCell2Ref <- xCell2::xCell2Train(ref = dice_ref, labels = dice_labels, refType = "rnaseq")
 #'
+#' # Parallel processing example with BiocParallel
+#' library(BiocParallel)
+#' parallel_param <- MulticoreParam(workers = 2)
+#' DICE.xCell2Ref <- xCell2::xCell2Train(ref = dice_ref, labels = dice_labels, refType = "rnaseq",
+#'  BPPARAM = parallel_param)
+#' 
 #' @seealso 
 #' \code{\link{xCell2Analysis}}, for enrichment analysis. 
 #' \code{\link{xCell2GetLineage}}, for refining cell type dependencies.
@@ -761,7 +777,7 @@ xCell2Train <- function(ref,
   # Generate pseudo bulk from scRNA-Seq reference
   if (refType == "sc") {
     message("Converting scRNA-seq reference to pseudo bulk...")
-    pbData <- ScToPseudoBulk(ref, labels, minPbCells, minPbSamples)
+    pbData <- ScToPseudoBulk(ref, labels, minPbCells, minPbSamples, BPPARAM)
     ref <- pbData$ref
     labels <- pbData$labels
   }

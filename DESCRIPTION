@@ -33,6 +33,7 @@ Imports:
     ontologyIndex,
     tibble,
     dplyr,
+    tidyselect,
     BiocParallel,
     Matrix,
     minpack.lm,

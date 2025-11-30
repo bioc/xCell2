@@ -13,6 +13,7 @@
 #' 
 #' @param mix A bulk mixture of gene expression matrix (genes in rows, samples in columns). 
 #'   The input should use the same gene annotation system as the reference object.
+#'   If is RNA-Seq data - normalization by gene length is highly recommended.
 #' @param xcell2object A pre-trained reference object of class \code{xCell2Object}, created using the \code{\link{xCell2Train}} function. 
 #'   Pre-trained references are available within the package for common use cases.
 #' @param minSharedGenes Minimum fraction of shared genes required between the mixture and the reference object (default: \code{0.9}). 
@@ -57,52 +58,6 @@
 #'
 #' library(xCell2)
 #'
-#' # Load "ready to use" xCell2 reference object or generate a new one using `xCell2Train`
-#' data(DICE_demo.xCell2Ref, package = "xCell2")
-#'
-#' # Load demo bulk RNA-Seq gene expression mixture
-#'
-#' @param mix A bulk mixture of gene expression data (genes in rows, samples in columns). 
-#'   The input must use the same gene annotation system as the reference object.
-#' @param xcell2object A pre-trained reference object of class \code{xCell2Object}, created using \code{\link{xCell2Train}}. 
-#'   Pre-trained references for common cases are provided within the package.
-#' @param minSharedGenes Minimum fraction of shared genes required between the mixture and the reference object (default: \code{0.9}). 
-#'   If the shared fraction is below this threshold, the function stops with an error or warning, as sufficient overlap is necessary 
-#'   for accurate analysis.
-#' @param rawScores Logical; if \code{TRUE}, returns raw enrichment scores without transformation or spillover correction (default: \code{FALSE}).
-#' @param spillover Logical; enables spillover correction on enrichment scores (default: \code{TRUE}). 
-#'   Spillover occurs when closely related cell types share gene expression patterns, inflating enrichment scores. 
-#'   Correction enhances specificity, particularly for related cell types.
-#' @param spilloverAlpha Numeric value controlling spillover correction strength (default: \code{0.5}). 
-#'   Lower values apply weaker correction, while higher values apply stronger correction.
-#' @param BPPARAM A \linkS4class{BiocParallelParam} instance to define parallelization strategy (see "Details"). 
-#'   Default is \code{BiocParallel::SerialParam()}.
-#'
-#' @return A data frame containing enrichment scores for each cell type and sample. 
-#'   Rows correspond to cell types and columns to samples.
-#'
-#' @details
-#' The \code{xCell2Analysis} function computes enrichment scores for each cell type using gene signatures 
-#' from a pre-trained \code{xCell2Object}. Linear transformations and spillover corrections refine the results, 
-#' improving specificity when cell types have overlapping gene expression patterns.
-#'
-#' \strong{Parallelization with \code{BPPARAM}:}
-#' Computations can be parallelized using the \code{BPPARAM} parameter.  
-#' Supported strategies include:
-#' \itemize{
-#'   \item \code{\link[BiocParallel]{MulticoreParam}} for multi-core processing (Linux/macOS).
-#'   \item \code{\link[BiocParallel]{SnowParam}} or \code{\link[BiocParallel]{SerialParam}} for Windows systems.
-#' }
-#' See the \href{https://www.bioconductor.org/packages/release/bioc/html/BiocParallel.html}{BiocParallel documentation}.
-#'
-#' \strong{Relationship with Other Functions:}
-#' The input reference object (\code{xCell2Object}) is created via \code{\link{xCell2Train}}.
-#'
-#' @examples
-#' # For detailed examples, see the xCell2 vignette.
-#'
-#' library(xCell2)
-#'
 #' # Load pre-trained reference object
 #' data(DICE_demo.xCell2Ref, package = "xCell2")
 #'
@@ -123,7 +78,7 @@
 #'   xcell2object = DICE_demo.xCell2Ref, 
 #'   BPPARAM = parallel_param
 #' )
-#'
+#' 
 #' @seealso 
 #' \code{\link{xCell2Train}}, for creating the reference object used in this analysis.
 #'
@@ -161,7 +116,7 @@ xCell2Analysis <- function(mix,
     if (all(sigs2remove) | sum(!sigs2remove) < 3) {
       warning(
         "Cannot calculate enrichment scores for '",
-        cellType, "' because all signatgures' genes are missing in your mixture."
+        cellType, "' because all genes in those signatures are missing in your mixture."
       )
       zeros_matrix <- matrix(rep(0, ncol(mixRanked)*3), nrow = ncol(mixRanked), ncol = 3)
       rownames(zeros_matrix) <- colnames(mixRanked)
@@ -206,6 +161,11 @@ xCell2Analysis <- function(mix,
     pb$tick()
     calcEnrichment(cellType)
   }
+  
+  # Check for missing values
+  if (any(is.na(mix))) {
+    stop("The mixture contains NA or NaN values. Please clean your data.")
+  }
 
   # Check reference/mixture genes intersection
   shared_genes <- intersect(rownames(mix), getGenesUsed(xcell2object))
@@ -227,7 +187,6 @@ xCell2Analysis <- function(mix,
     )    
   }
   
-
   # Rank mix gene expression matrix
   mixRanked <- singscore::rankGenes(mix[shared_genes, ])
   
@@ -257,6 +216,15 @@ xCell2Analysis <- function(mix,
   res <- t(vapply(resRaw, function(cellTypeScores) {
     rowMeans(cellTypeScores)
   }, FUN.VALUE = double(nrow(resRaw[[1]]))))
+  
+  # Check for negative enrichment scores
+  neg_enrichment <- names(which(apply(res, 2, function(x){any(x<0)})))
+  if (length(neg_enrichment) > 0) {
+    error_msg <- paste0("There is a problem with the following samples: ",
+                        paste(neg_enrichment, collapse = ", "),
+                        ". Please check your input.")
+    stop(error_msg)
+  }
   
   if (rawScores) {
     message("Returning raw enrichment scores without linear transformation or correction.")
