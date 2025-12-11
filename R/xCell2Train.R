@@ -528,7 +528,7 @@ LearnParams <- function(gepMat, corMat, signatures, depList, BPPARAM) {
   # Learn linear parameters
   linearParams <- BiocParallel::bplapply(cellTypes, function(cellType) {
     # Get scores
-    mixMatRanked <- singscore::rankGenes(mixList[[cellType]])
+    mixMatRanked <- singscore::rankGenes(mixList[[cellType]], tiesMethod="average")
     signaturesCellType <- signatures[gsub("#.*", "", names(signatures)) %in% cellType]
     scores <- rowMeans(vapply(signaturesCellType, function(sig) {
       singscore::simpleScore(mixMatRanked, upSet = sig, centerScore = FALSE)$TotalScore
@@ -581,7 +581,7 @@ LearnParams <- function(gepMat, corMat, signatures, depList, BPPARAM) {
     mixture <- ctsMatFrac + controlsMatFrac
     
     # Get results for all cell type mixtures
-    mixCtsMatRanked <- singscore::rankGenes(mixture)
+    mixCtsMatRanked <- singscore::rankGenes(mixture, tiesMethod="average")
     mixCtsMatScores <- vapply(signaturesCellType, function(sig) {
       singscore::simpleScore(mixCtsMatRanked, upSet = sig, centerScore = FALSE)$TotalScore
     }, FUN.VALUE = double(ncol(mixCtsMatRanked)))
@@ -591,7 +591,7 @@ LearnParams <- function(gepMat, corMat, signatures, depList, BPPARAM) {
     names(mixCtsMatScores) <- colnames(mixCtsMatRanked)
     
     # Get results for all cell type controls
-    controlsCtsMatRanked <- singscore::rankGenes(controlsMatFrac)
+    controlsCtsMatRanked <- singscore::rankGenes(controlsMatFrac, tiesMethod="average")
     colnames(controlsCtsMatRanked) <- make.unique(colnames(controlsCtsMatRanked))
     controlsCtsMatScores <- vapply(signaturesCellType, function(sig) {
       singscore::simpleScore(controlsCtsMatRanked, upSet = sig, centerScore = FALSE)$TotalScore
